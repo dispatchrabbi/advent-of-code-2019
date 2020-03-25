@@ -85,6 +85,13 @@ const OPERATIONS = [
   },
 ];
 
+// Not all opcodes, just ones that require functionality outside of computation
+const OPCODES = {
+  HALT: 99,
+  INPUT: 3,
+  OUTPUT: 4,
+};
+
 const MODES = {
   POSITION: 0,
   IMMEDIATE: 1,
@@ -105,38 +112,22 @@ class IntCode {
     this.flags = Object.assign({}, DEFAULT_FLAGS);
   }
 
-  run(input = []) {
-    this.input = input;
-
+  *run() {
     while(true) {
       // this.printDebugLog();
       const opcode = this.memory[this.pointer];
 
-      if(opcode === 99) {
-        break;
+      if(opcode === OPCODES.HALT) {
+        return this.output.shift();
+      } else if(opcode === OPCODES.INPUT) {
+        const nextOutput = this.output.shift();
+        const nextInput = yield nextOutput;
+        this.input.push(nextInput);
       }
 
       this.resetFlags();
       this.executeNextInstruction();
     }
-
-    return this.output;
-  }
-
-  // TODO: Format this better
-  printDebugLog() {
-    [
-      'memory',
-      'pointer',
-      'flags',
-      'input',
-      'output',
-    ].forEach((part) => {
-      console.debug(part);
-      console.debug(this[part]);
-    });
-
-    console.debug('');
   }
 
   resetFlags() {
@@ -211,6 +202,38 @@ class IntCode {
     this.output.push(val);
   }
 
+  // TODO: add debug mode
+  printDebugLog() {
+    this.printMemoryForDebug(this.memory, this.pointer);
+    console.debug(`pointer is at ${this.pointer}`);
+    console.debug(`flags: J:${this.flags.jumped ? 'X' : '-'}`);
+    console.debug(`input queue: ${this.input}`);
+    console.debug(`output queue: ${this.output}`);
+    console.debug('');
+  }
+
+  printMemoryForDebug(memory, pointer) {
+    const prettyMemory = memory.map((val, loc) => {
+      const pointerIndicator = loc === pointer ? '^' : ' ';
+
+      const valStr = '' + val;
+      // memory values can be expected to be a max of 6 digits wide
+      console.log({loc, val, len: valStr.length});
+      const padding = Array(6 - valStr.length).fill('.').join('');
+
+      return `${pointerIndicator}${padding}${valStr} `;
+    });
+
+    const displayRows = [];
+    let rowIndex = 0;
+    const ENTRIES_PER_ROW = 10;
+    while(rowIndex * ENTRIES_PER_ROW < prettyMemory.length) {
+      displayRows.push(prettyMemory.slice(rowIndex * ENTRIES_PER_ROW, rowIndex * ENTRIES_PER_ROW + ENTRIES_PER_ROW));
+      rowIndex++;
+    }
+
+    displayRows.forEach(row => console.debug(row.join('')));
+  }
 }
 
 module.exports = IntCode;

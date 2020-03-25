@@ -9,7 +9,7 @@ async function processInput(filepath, splitOn = '\n', castToNumber = false) {
     let contents = await readFileAsPromised(filepath, 'utf-8');
 
     if(splitOn !== null) {
-      contents = contents.split(splitOn).filter(text => text.length > 0);
+      contents = contents.split(splitOn).filter(text => text.trim().length > 0);
 
       if(castToNumber) {
         contents = contents.map(x => +x);
