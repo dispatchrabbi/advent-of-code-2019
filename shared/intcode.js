@@ -1,3 +1,5 @@
+const DEBUG = false;
+
 const OPERATIONS = [
   {
     name: 'add',
@@ -6,7 +8,8 @@ const OPERATIONS = [
     func: function(args, modes) {
       const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
 
-      this.memory[args[2]] = argVals[0] + argVals[1];
+      const loc = args[2] + (modes[2] === MODES.RELATIVE ? this.base : 0);
+      this.writeValueTo(loc, argVals[0] + argVals[1]);
     },
   },
   {
@@ -16,7 +19,8 @@ const OPERATIONS = [
     func: function(args, modes) {
       const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
 
-      this.memory[args[2]] = argVals[0] * argVals[1];
+      const loc = args[2] + (modes[2] === MODES.RELATIVE ? this.base : 0);
+      this.writeValueTo(loc, argVals[0] * argVals[1]);
     },
   },
   {
@@ -24,7 +28,10 @@ const OPERATIONS = [
     opcode: 3,
     args: 1,
     func: function(args, modes) {
-      this.memory[args[0]] = this.read();
+      const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
+
+      const loc = args[0] + (modes[0] === MODES.RELATIVE ? this.base : 0);
+      this.writeValueTo(loc, this.input.shift());
     }
   },
   {
@@ -34,7 +41,7 @@ const OPERATIONS = [
     func: function(args, modes) {
       const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
 
-      this.write(argVals[0]);
+      this.output.push(argVals[0]);
     }
   },
   {
@@ -70,7 +77,8 @@ const OPERATIONS = [
     func: function(args, modes) {
       const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
 
-      this.memory[args[2]] = (argVals[0] < argVals[1] ? 1 : 0);
+      const loc = args[2] + (modes[2] === MODES.RELATIVE ? this.base : 0);
+      this.writeValueTo(loc, (argVals[0] < argVals[1] ? 1 : 0));
     }
   },
   {
@@ -80,7 +88,27 @@ const OPERATIONS = [
     func: function(args, modes) {
       const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
 
-      this.memory[args[2]] = (argVals[0] === argVals[1] ? 1 : 0);
+      const loc = args[2] + (modes[2] === MODES.RELATIVE ? this.base : 0);
+      this.writeValueTo(loc, (argVals[0] === argVals[1] ? 1 : 0));
+    }
+  },
+  {
+    name: 'adjust-base',
+    opcode: 9,
+    args: 1,
+    func: function(args, modes) {
+      const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
+
+      const oldBase = this.base;
+      this.base += argVals[0];
+    }
+  },
+  {
+    name: 'halt',
+    opcode: 99,
+    args: 0,
+    func: function(args, modes) {
+      throw new Error(`Somehow a 99 instruction actually got executed. That's not supposed to happen.`);
     }
   },
 ];
@@ -95,6 +123,7 @@ const OPCODES = {
 const MODES = {
   POSITION: 0,
   IMMEDIATE: 1,
+  RELATIVE: 2,
 };
 
 const DEFAULT_FLAGS = {
@@ -105,6 +134,7 @@ class IntCode {
   constructor(memory) {
     this.pointer = 0;
     this.memory = memory;
+    this.base = 0;
 
     this.input = [];
     this.output = [];
@@ -115,7 +145,7 @@ class IntCode {
   *run() {
     while(true) {
       // this.printDebugLog();
-      const opcode = this.memory[this.pointer];
+      const { opcode } = this.parseInstruction(this.readValueAt(this.pointer));
 
       if(opcode === OPCODES.HALT) {
         return this.output.shift();
@@ -136,16 +166,43 @@ class IntCode {
 
   executeNextInstruction() {
 
-    const instructionCode = this.memory[this.pointer];
+    const { opcode, operation, modes } = this.parseInstruction(this.readValueAt(this.pointer));
 
-    const instructionString = '' + instructionCode;
+    // grab the right number of args out of memory
+    const args = this.memory.slice(this.pointer + 1, this.pointer + operation.args + 1);
+
+    // execute the instruction
+    if(DEBUG) {
+      console.debug(`About to execute:`);
+      const argVals = args.map((el, ix) => this.argValue(el, modes[ix]));
+      console.debug({
+        name: operation.name,
+        instruction: this.readValueAt(this.pointer),
+        opcode,
+        modes,
+        args,
+        argVals,
+      });
+      this.printDebugLog();
+    }
+
+    operation.func.call(this, args, modes);
+
+    // advance the pointer (maybe)
+    if(!this.flags.jumped) {
+      this.pointer = this.pointer + operation.args + 1;
+    }
+  }
+
+  parseInstruction(instruction) {
+    const instructionString = '' + instruction;
 
     // get the opcode and operation to perform:
     // The last two digits are the opcode. So, for `1002`, the opcode is `02`
     const opcode = +instructionString.substr(-2);
     const operation = OPERATIONS.find(op => op.opcode === opcode);
     if(!operation) {
-      throw new Error(`Invalid opcode ${opcode} found at position ${this.pointer} (instruction was ${this.memory[this.pointer]})`);
+      throw new Error(`Invalid opcode ${opcode} found at position ${this.pointer} (instruction was ${this.readValueAt(this.pointer)})`);
     }
 
     // get the parameter modes:
@@ -162,15 +219,28 @@ class IntCode {
       modes.fill(0, originalLength);
     }
 
-    // grab the right number of args out of memory
-    const args = this.memory.slice(this.pointer + 1, this.pointer + operation.args + 1);
+    return { opcode, operation, modes };
+  }
 
-    // execute the instruction
-    operation.func.call(this, args, modes);
+  readValueAt(loc) {
+    this.allocateMemoryIfNeeded(loc);
+    return this.memory[loc];
+  }
 
-    // advance the pointer (maybe)
-    if(!this.flags.jumped) {
-      this.pointer = this.pointer + operation.args + 1;
+  writeValueTo(loc, val) {
+    this.allocateMemoryIfNeeded(loc);
+    this.memory[loc] = val;
+  }
+
+  allocateMemoryIfNeeded(loc) {
+    if(loc < 0) {
+      throw new Error(`Negative memory location (${loc}) requested`);
+    }
+
+    if(this.memory.length < (loc + 1)) {
+      const oldLength = this.memory.length;
+      this.memory.length = loc + 1;
+      this.memory.fill(0, oldLength);
     }
   }
 
@@ -179,10 +249,13 @@ class IntCode {
 
     switch(mode) {
       case MODES.POSITION:
-        value = this.memory[arg];
+        value = this.readValueAt(arg);
         break;
       case MODES.IMMEDIATE:
         value = arg;
+        break;
+      case MODES.RELATIVE:
+        value = this.readValueAt(this.base + arg);
         break;
       default:
         throw new Error(`Invalid mode ${mode} given (arg was ${arg})`);
@@ -191,21 +264,11 @@ class IntCode {
     return value;
   }
 
-  read() {
-    const val = this.input.shift();
-    // console.log(`Reading from input: ${val}`);
-    return val;
-  }
-
-  write(val) {
-    // console.log(`Writing to output: ${val}`);
-    this.output.push(val);
-  }
-
   // TODO: add debug mode
   printDebugLog() {
     this.printMemoryForDebug(this.memory, this.pointer);
     console.debug(`pointer is at ${this.pointer}`);
+    console.debug(`relative base is ${this.base}`);
     console.debug(`flags: J:${this.flags.jumped ? 'X' : '-'}`);
     console.debug(`input queue: ${this.input}`);
     console.debug(`output queue: ${this.output}`);
@@ -217,16 +280,18 @@ class IntCode {
       const pointerIndicator = loc === pointer ? '^' : ' ';
 
       const valStr = '' + val;
-      // memory values can be expected to be a max of 6 digits wide
-      console.log({loc, val, len: valStr.length});
-      const padding = Array(6 - valStr.length).fill('.').join('');
+      // memory values can be expected to be a max of 16 digits wide
+      const padding = Array(18 - valStr.length).fill('.').join('');
 
       return `${pointerIndicator}${padding}${valStr} `;
     });
 
-    const displayRows = [];
+    const ENTRIES_PER_ROW = 50;
+    const displayRows = [
+      // This row displays 1, 2, 3, ... etc. on top of each of the columns
+      Array(ENTRIES_PER_ROW).fill(0).map((el, ix) => (' ' + ix + Array(18 - ('' + ix).length).fill(' ').join('') + ' ')),
+    ];
     let rowIndex = 0;
-    const ENTRIES_PER_ROW = 10;
     while(rowIndex * ENTRIES_PER_ROW < prettyMemory.length) {
       displayRows.push(prettyMemory.slice(rowIndex * ENTRIES_PER_ROW, rowIndex * ENTRIES_PER_ROW + ENTRIES_PER_ROW));
       rowIndex++;
